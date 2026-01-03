@@ -11,7 +11,6 @@ local Window = Library:Window({
     Version = "v1.24",
     Logo = "135215559087473",
     FadeSpeed = 0.25,
-    Size = UDim2.new(0, 300, 0, 130)
 })
 
 local Players = game:GetService("Players")
