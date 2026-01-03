@@ -1,0 +1,2757 @@
+-- WORKING VERSION WITH FIXED ARMOR ESP AND DEATH HANDLING
+-- Using drawing-based ESP with correct armor detection
+
+local LoadingTick = tick()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Scripting137/Nevoxbackup/main/Nevox%20Ui"))()
+
+local windowSize = UDim2.new(0, 400, 0, 400)
+
+local Window = Library:Window({
+    Name = "Essence",
+    Version = "v1.24",
+    Logo = "135215559087473",
+    FadeSpeed = 0.25,
+    Size = windowSize
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local TweenService = game:GetService("TweenService")
+local PathfindingService = game:GetService("PathfindingService")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+---------------------------------------------------------------------
+-- GAME SERVICES AND MODULES
+---------------------------------------------------------------------
+
+local rs = game:GetService("ReplicatedStorage")
+local packets = require(rs.Modules.Packets)
+local plr = LocalPlayer
+local root = RootPart
+local hum = Humanoid
+
+---------------------------------------------------------------------
+-- GLOBAL VARIABLES WITH CHARACTER UPDATES
+---------------------------------------------------------------------
+
+local originalValues = {
+    WalkSpeed = Humanoid.WalkSpeed,
+    JumpPower = Humanoid.JumpPower,
+    HipHeight = Humanoid.HipHeight,
+    MaxSlopeAngle = Humanoid.MaxSlopeAngle
+}
+
+local canDoubleJump = false
+local hasDoubleJumped = false
+local doubleJumpConnections = {}
+
+local wsConn, jpConn, hhConn, slopeConn
+
+-- Function to update character references
+local function updateCharacterReferences()
+    Character = LocalPlayer.Character
+    if Character then
+        Humanoid = Character:WaitForChild("Humanoid")
+        RootPart = Character:WaitForChild("HumanoidRootPart")
+        root = RootPart
+        hum = Humanoid
+        
+        -- Update original values for new character
+        originalValues = {
+            WalkSpeed = Humanoid.WalkSpeed,
+            JumpPower = Humanoid.JumpPower,
+            HipHeight = Humanoid.HipHeight,
+            MaxSlopeAngle = Humanoid.MaxSlopeAngle
+        }
+        
+        -- Reapply any active movement mods
+        if wsConn then
+            local wsToggleValue = Library.Flags["Move_WalkSpeedToggle"]
+            if wsToggleValue then
+                updateWalkSpeed(true, {Get = function() return Library.Flags["Move_WalkSpeed"] end})
+            end
+        end
+        
+        if jpConn then
+            local jpToggleValue = Library.Flags["Move_JumpPowerToggle"]
+            if jpToggleValue then
+                updateJumpPower(true, {Get = function() return Library.Flags["Move_JumpPower"] end})
+            end
+        end
+        
+        if hhConn then
+            local hhToggleValue = Library.Flags["Move_HipHeightToggle"]
+            if hhToggleValue then
+                updateHipHeight(true, {Get = function() return Library.Flags["Move_HipHeight"] end})
+            end
+        end
+        
+        if slopeConn then
+            local noSlipValue = Library.Flags["Move_MountainClimer"]
+            if noSlipValue then
+                updateNoSlip(true)
+            end
+        end
+        
+        -- Reapply double jump
+        local doubleJumpValue = Library.Flags["Move_DoubleJump"]
+        if doubleJumpValue then
+            updateDoubleJump(true, {Get = function() return Library.Flags["Move_JumpPower"] end})
+        end
+    end
+end
+
+-- Listen for character changes
+LocalPlayer.CharacterAdded:Connect(function()
+    updateCharacterReferences()
+end)
+
+---------------------------------------------------------------------
+-- MOVEMENT FUNCTIONS WITH SAFE HANDLING
+---------------------------------------------------------------------
+
+local function updateWalkSpeed(enabled, sliderObj)
+    if wsConn then wsConn:Disconnect() wsConn = nil end
+    if enabled and Humanoid and Humanoid.Parent then
+        Humanoid.WalkSpeed = sliderObj:Get()
+        wsConn = RunService.RenderStepped:Connect(function()
+            if Humanoid and Humanoid.Parent then
+                Humanoid.WalkSpeed = sliderObj:Get()
+            else
+                if wsConn then wsConn:Disconnect() wsConn = nil end
+            end
+        end)
+    elseif Humanoid and Humanoid.Parent then
+        Humanoid.WalkSpeed = originalValues.WalkSpeed
+    end
+end
+
+local function updateJumpPower(enabled, sliderObj)
+    if jpConn then jpConn:Disconnect() jpConn = nil end
+    if enabled and Humanoid and Humanoid.Parent then
+        Humanoid.JumpPower = sliderObj:Get()
+        jpConn = RunService.RenderStepped:Connect(function()
+            if Humanoid and Humanoid.Parent then
+                Humanoid.JumpPower = sliderObj:Get()
+            else
+                if jpConn then jpConn:Disconnect() jpConn = nil end
+            end
+        end)
+    elseif Humanoid and Humanoid.Parent then
+        Humanoid.JumpPower = originalValues.JumpPower
+    end
+end
+
+local function updateHipHeight(enabled, sliderObj)
+    if hhConn then hhConn:Disconnect() hhConn = nil end
+    if enabled and Humanoid and Humanoid.Parent then
+        Humanoid.HipHeight = sliderObj:Get()
+        hhConn = RunService.RenderStepped:Connect(function()
+            if Humanoid and Humanoid.Parent then
+                Humanoid.HipHeight = sliderObj:Get()
+            else
+                if hhConn then hhConn:Disconnect() hhConn = nil end
+            end
+        end)
+    elseif Humanoid and Humanoid.Parent then
+        Humanoid.HipHeight = originalValues.HipHeight
+    end
+end
+
+local function updateNoSlip(enabled)
+    if slopeConn then slopeConn:Disconnect() slopeConn = nil end
+    if enabled and Humanoid and Humanoid.Parent then
+        Humanoid.MaxSlopeAngle = 89.9
+        slopeConn = RunService.RenderStepped:Connect(function()
+            if Humanoid and Humanoid.Parent then
+                Humanoid.MaxSlopeAngle = 89.9
+            else
+                if slopeConn then slopeConn:Disconnect() slopeConn = nil end
+            end
+        end)
+    elseif Humanoid and Humanoid.Parent then
+        Humanoid.MaxSlopeAngle = originalValues.MaxSlopeAngle
+    end
+end
+
+local function updateDoubleJump(enabled, jumpSlider)
+    for _, c in pairs(doubleJumpConnections) do c:Disconnect() end
+    doubleJumpConnections = {}
+
+    if enabled then
+        local groundConn = RunService.RenderStepped:Connect(function()
+            if Humanoid and Humanoid.Parent and Humanoid.FloorMaterial ~= Enum.Material.Air then
+                hasDoubleJumped = false
+                canDoubleJump = true
+            end
+        end)
+
+        local inputConn = UserInputService.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            if Humanoid and Humanoid.Parent
+                and input.KeyCode == Enum.KeyCode.Space
+                and Humanoid.FloorMaterial == Enum.Material.Air
+                and canDoubleJump
+                and not hasDoubleJumped then
+
+                local v = RootPart.Velocity
+                RootPart.Velocity = Vector3.new(v.X, jumpSlider:Get(), v.Z)
+                hasDoubleJumped = true
+                canDoubleJump = false
+            end
+        end)
+
+        table.insert(doubleJumpConnections, groundConn)
+        table.insert(doubleJumpConnections, inputConn)
+    end
+end
+
+---------------------------------------------------------------------
+-- BOOGA COMBAT AND FARMING SYSTEM INTEGRATION
+---------------------------------------------------------------------
+
+-- Trapping & Building
+local hutToggle = false
+local hiddenDoors = {}
+local PlaceEvent = rs:FindFirstChild("PlaceStructure", true) or (rs:FindFirstChild("Events") and rs.Events:FindFirstChild("PlaceStructure"))
+local plantBoxToggle = false
+local campfireToggle = false
+
+-- Combat variables
+local killAuraEnabled = false
+local killAuraRange = 8
+
+-- Auto Heal/Eat
+local autoHealEnabled = false
+local autoEatEnabled = false
+local autoHealFruit = "Bloodfruit"
+local autoEatFruit = "Coconut"
+local autoHealThreshold = 90
+local autoEatThreshold = 90
+local autoEatCPS = 240
+local healClickDelay = 0.005
+
+-- Auto Pickup
+local autoPickupEnabled = false
+local pickupRange = 30
+local selectedItems = {}
+local PickAllMode = false
+local chestPickupEnabled = false
+local customPickupEnabled = false
+local customPickupText = ""
+
+-- Auto Drop
+local autoDropEnabled = false
+local dropItem = "All"
+local autoDropCustomEnabled = false
+local customDropItem = "Bloodfruit"
+
+-- Farming
+local plantToggle = false
+local plantRange = 30
+local selectedFruit = "Bloodfruit"
+local harvestToggle = false
+local harvestRange = 30
+
+-- Tween Farming
+local tweenPlantBoxEnabled = false
+local tweenBushEnabled = false
+local tweenRange = 250
+local currentTween = nil
+local tweenSpeed = 15
+
+-- Resource & Critter Aura
+local resourceAuraEnabled = false
+local resourceRange = 20
+local critterAuraEnabled = false
+local critterRange = 20
+
+-- ESP Settings (Updated with armor fixes)
+local espEnabled = false
+local espShowHP = true
+local espShowArmor = true
+local espShowWeapon = true
+local espMaxDistance = 2500
+
+local WorldESP = {
+    Items = {Enabled = false, Range = 500, Filter = {}, All = false},
+    Critters = {Enabled = false, Range = 1000, Filter = {}, All = false},
+    Resources = {Enabled = false, Range = 5000, Filter = {}, All = false, Gods = false}
+}
+
+-- Item lists
+local allItems = {
+    "ALL ITEMS",
+    "Wood", "Log", "Stone", "Iron", "Gold", "Bloodfruit", "Bluefruit", "Lemon", "Strawberry", 
+    "Adurite", "Coin", "Essence", "Crystal Chunk", "Leaves", "Hide", "Steel", "Magnetite", 
+    "Pink Diamond", "Emerald", "Void Shard", "Jelly", "Ice Cube", "Coal", "Coconut",
+    "Banana", "Orange", "Berry", "Oddberry", "Strangefruit", "Sunfruit", "Pumpkin",
+    "Prickly Pear", "Apple", "Barley", "Cloudberry", "Carrot", "Snow Berry", "Cloudfruit"
+}
+
+local fruitToItemId = {
+    Bloodfruit = 94,
+    Bluefruit = 377,
+    Lemon = 99,
+    Coconut = 1,
+    Jelly = 604,
+    Banana = 606,
+    Orange = 602,
+    Berry = 35,
+    Oddberry = 32,
+    Strangefruit = 302,
+    Strawberry = 282,
+    Sunfruit = 128,
+    Pumpkin = 80,
+    ["Prickly Pear"] = 378,
+    Apple = 243,
+    Barley = 247,
+    Cloudberry = 101,
+    Carrot = 147,
+    ["Snow Berry"] = 490,
+    Cloudfruit = 514
+}
+
+---------------------------------------------------------------------
+-- BOOGA HELPER FUNCTIONS WITH SAFE HANDLING
+---------------------------------------------------------------------
+
+local function IsEnemy(target)
+    if not target or target == plr then return false end
+    if plr.Neutral then return true end
+    if plr.Team ~= target.Team then return true end
+    return false
+end
+
+local function PlaceStructure(name, pos, yRot)
+    local data = {
+        ["buildingName"] = name,
+        ["vec"] = pos,
+        ["cframe"] = CFrame.new(pos) * CFrame.Angles(0, math.rad(yRot or 0), 0),
+        ["yrot"] = yRot or 0,
+        ["cursor"] = {["Hit"] = {["p"] = pos}, ["Target"] = workspace.Terrain},
+        ["isMobile"] = false
+    }
+    
+    if packets and packets.PlaceStructure then 
+        pcall(function() packets.PlaceStructure.send(data) end)
+    elseif PlaceEvent then
+        pcall(function() PlaceEvent:FireServer(data) end) 
+    end
+end
+
+local function PlaceCampfireAtPlayer()
+    local char = plr.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    local pos = root.Position + Vector3.new(0, -3, 0)
+    PlaceStructure("Campfire", pos, math.random(0, 360))
+end
+
+local function HandleDoors(filter, shouldHide)
+    local dep = workspace:FindFirstChild("Deployables")
+    if not dep then return end
+    
+    if shouldHide then
+        for _, item in ipairs(dep:GetChildren()) do
+            if item.Name:find(filter) then
+                local door = item:FindFirstChild("Door")
+                if door then 
+                    hiddenDoors[door] = item
+                    door.Parent = nil 
+                end
+            end
+        end
+    else
+        for door, originalParent in pairs(hiddenDoors) do
+            if originalParent and originalParent.Name:find(filter) then
+                door.Parent = originalParent
+                hiddenDoors[door] = nil
+            end
+        end
+    end
+end
+
+local function swingTool(targets)
+    if packets and packets.SwingTool and packets.SwingTool.send then
+        pcall(function() packets.SwingTool.send(targets) end)
+    end
+end
+
+local function pickupItem(entityid)
+    if packets and packets.Pickup and packets.Pickup.send then
+        pcall(function() packets.Pickup.send(entityid) end)
+    end
+end
+
+local function dropItemByName(itemName)
+    if itemName == "All" then
+        local inventory = plr.PlayerGui:FindFirstChild("MainGui")
+        if not inventory then return end
+        inventory = inventory:FindFirstChild("RightPanel")
+        if not inventory then return end
+        inventory = inventory:FindFirstChild("Inventory")
+        if not inventory then return end
+        local list = inventory:FindFirstChild("List")
+        if not list then return end
+        
+        for _, child in ipairs(list:GetChildren()) do
+            if child:IsA("ImageLabel") and child.Name ~= "" then
+                if packets and packets.DropBagItem and packets.DropBagItem.send then
+                    pcall(function() packets.DropBagItem.send(child.LayoutOrder) end)
+                end
+            end
+        end
+    else
+        local inventory = plr.PlayerGui:FindFirstChild("MainGui")
+        if not inventory then return end
+        inventory = inventory:FindFirstChild("RightPanel")
+        if not inventory then return end
+        inventory = inventory:FindFirstChild("Inventory")
+        if not inventory then return end
+        local list = inventory:FindFirstChild("List")
+        if not list then return end
+        
+        for _, child in ipairs(list:GetChildren()) do
+            if child:IsA("ImageLabel") and child.Name == itemName then
+                if packets and packets.DropBagItem and packets.DropBagItem.send then
+                    pcall(function() packets.DropBagItem.send(child.LayoutOrder) end)
+                end
+            end
+        end
+    end
+end
+
+local function useBagItem(layoutOrder)
+    if packets and packets.UseBagItem and packets.UseBagItem.send then
+        pcall(function() packets.UseBagItem.send(layoutOrder) end)
+    end
+end
+
+local function interactStructure(data)
+    if packets and packets.InteractStructure and packets.InteractStructure.send then
+        pcall(function() packets.InteractStructure.send(data) end)
+    end
+end
+
+local function getHealth()
+    local mainGui = plr.PlayerGui:FindFirstChild("MainGui")
+    if not mainGui then return 100 end
+    
+    local stats = mainGui:FindFirstChild("Panels")
+    if not stats then return 100 end
+    stats = stats:FindFirstChild("Stats")
+    if not stats then return 100 end
+    local bars = stats:FindFirstChild("Bars")
+    if not bars then return 100 end
+    local healthBar = bars:FindFirstChild("Health")
+    if not healthBar then return 100 end
+    local valueLabel = healthBar:FindFirstChild("ValueLabel")
+    if not valueLabel then return 100 end
+    
+    if valueLabel.Text then
+        return tonumber(valueLabel.Text:match("%d+")) or 100
+    end
+    return 100
+end
+
+local function getHunger()
+    local mainGui = plr.PlayerGui:FindFirstChild("MainGui")
+    if not mainGui then return 100 end
+    
+    local stats = mainGui:FindFirstChild("Panels")
+    if not stats then return 100 end
+    stats = stats:FindFirstChild("Stats")
+    if not stats then return 100 end
+    local bars = stats:FindFirstChild("Bars")
+    if not bars then return 100 end
+    local hungerBar = bars:FindFirstChild("Hunger")
+    if not hungerBar then return 100 end
+    local valueLabel = hungerBar:FindFirstChild("ValueLabel")
+    if not valueLabel then return 100 end
+    
+    if valueLabel.Text then
+        return tonumber(valueLabel.Text:match("%d+")) or 100
+    end
+    return 100
+end
+
+local function getInventoryItem(itemName)
+    local mainGui = plr.PlayerGui:FindFirstChild("MainGui")
+    if not mainGui then return nil end
+    
+    local rightPanel = mainGui:FindFirstChild("RightPanel")
+    if not rightPanel then return nil end
+    
+    local inventory = rightPanel:FindFirstChild("Inventory")
+    if not inventory then return nil end
+    
+    local list = inventory:FindFirstChild("List")
+    if not list then return nil end
+    
+    for _, child in ipairs(list:GetChildren()) do
+        if child:IsA("ImageLabel") and child.Name == itemName then
+            return child
+        end
+    end
+    return nil
+end
+
+local function getPlantBoxes(range)
+    local plantboxes = {}
+    if not workspace:FindFirstChild("Deployables") then return plantboxes end
+    for _, deployable in ipairs(workspace.Deployables:GetChildren()) do
+        if deployable:IsA("Model") and deployable.Name == "Plant Box" then
+            local entityid = deployable:GetAttribute("EntityID")
+            local ppart = deployable.PrimaryPart or deployable:FindFirstChildWhichIsA("BasePart")
+            if entityid and ppart and RootPart then
+                local dist = (ppart.Position - RootPart.Position).Magnitude
+                if dist <= range then
+                    table.insert(plantboxes, { entityid = entityid, deployable = deployable, dist = dist })
+                end
+            end
+        end
+    end
+    return plantboxes
+end
+
+local function getBushes(range, fruitname)
+    local bushes = {}
+    for _, model in ipairs(workspace:GetChildren()) do
+        if model:IsA("Model") and string.find(string.lower(model.Name), string.lower(fruitname)) then
+            local ppart = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+            if ppart and RootPart then
+                local dist = (ppart.Position - RootPart.Position).Magnitude
+                if dist <= range then
+                    local entityid = model:GetAttribute("EntityID")
+                    if entityid then
+                        table.insert(bushes, { entityid = entityid, model = model, dist = dist })
+                    end
+                end
+            end
+        end
+    end
+    return bushes
+end
+
+-- CORRECT ARMOR DETECTION FROM SECOND SCRIPT
+local function getPlayerArmor(player)
+    if not player.Character then return "None" end
+    
+    local armor = {}
+    for _, v in pairs(player.Character:GetChildren()) do
+        if v.Name:lower():find("chest") or v.Name:lower():find("greaves") or v.Name:lower():find("helmet") then
+            table.insert(armor, v.Name:match("^%S+") or v.Name)
+        end
+    end
+    
+    if #armor > 0 then
+        return table.concat(armor, "/")
+    end
+    
+    return "None"
+end
+
+-- CORRECT WEAPON DETECTION FROM SECOND SCRIPT
+local function getPlayerWeapon(player)
+    if not player.Character then return "None" end
+    
+    local tools = player.Character:FindFirstChild("Tools")
+    local weapon = tools and (tools:FindFirstChildWhichIsA("Model") or tools:FindFirstChildWhichIsA("BasePart"))
+    if weapon then
+        return weapon.Name
+    end
+    
+    return "None"
+end
+
+local function smartTween(targetPosition, heightOffset)
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    
+    local char = plr.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid then return end
+    
+    local currentPos = char.HumanoidRootPart.Position
+    local targetPos = targetPosition + Vector3.new(0, heightOffset or 3, 0)
+    
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        WaypointSpacing = 4,
+        Costs = {
+            Water = 20,
+            Lava = 100
+        }
+    })
+    
+    pcall(function() path:ComputeAsync(currentPos, targetPos) end)
+    
+    if path.Status == Enum.PathStatus.Success then
+        local waypoints = path:GetWaypoints()
+        
+        for i, waypoint in ipairs(waypoints) do
+            if not tweenPlantBoxEnabled and not tweenBushEnabled then
+                break
+            end
+            
+            if waypoint.Action == Enum.PathWaypointAction.Jump then
+                humanoid.Jump = true
+            end
+            
+            local distance = (waypoint.Position - char.HumanoidRootPart.Position).Magnitude
+            local tweenTime = distance / tweenSpeed
+            
+            local tweenInfo = TweenInfo.new(
+                tweenTime,
+                Enum.EasingStyle.Quad,
+                Enum.EasingDirection.Out,
+                0,
+                false,
+                0
+            )
+            
+            local targetCFrame = CFrame.new(waypoint.Position) * CFrame.Angles(0, char.HumanoidRootPart.CFrame.Y, 0)
+            
+            currentTween = TweenService:Create(char.HumanoidRootPart, tweenInfo, {CFrame = targetCFrame})
+            currentTween:Play()
+            
+            local completed = false
+            currentTween.Completed:Connect(function()
+                completed = true
+            end)
+            
+            local startTime = tick()
+            while not completed and tick() - startTime < tweenTime + 1 do
+                if not tweenPlantBoxEnabled and not tweenBushEnabled then
+                    break
+                end
+                RunService.Heartbeat:Wait()
+            end
+            
+            if not completed then
+                currentTween:Cancel()
+            end
+        end
+    else
+        local distance = (targetPos - currentPos).Magnitude
+        local tweenTime = distance / tweenSpeed
+        
+        local tweenInfo = TweenInfo.new(
+            tweenTime,
+            Enum.EasingStyle.Quad,
+            Enum.EasingDirection.Out,
+            0,
+            false,
+            0
+        )
+        
+        local targetCFrame = CFrame.new(targetPos) * CFrame.Angles(0, char.HumanoidRootPart.CFrame.Y, 0)
+        
+        currentTween = TweenService:Create(char.HumanoidRootPart, tweenInfo, {CFrame = targetCFrame})
+        currentTween:Play()
+    end
+end
+
+---------------------------------------------------------------------
+-- AUTOMATION LOOPS WITH SAFE HANDLING
+---------------------------------------------------------------------
+
+-- Auto Hut
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if hutToggle and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            for _, v in ipairs(Players:GetPlayers()) do
+                if v ~= plr and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
+                    if IsEnemy(v) then
+                        local eRoot = v.Character.HumanoidRootPart
+                        local dist = (eRoot.Position - plr.Character.HumanoidRootPart.Position).Magnitude
+                        
+                        if dist < 50 then
+                            local p = eRoot.Position
+                            local radius = 9
+                            
+                            for i = 1, 8 do
+                                if not hutToggle then break end
+                                
+                                local angle = math.rad(i * 45)
+                                local xOffset = math.cos(angle) * radius
+                                local zOffset = math.sin(angle) * radius
+                                
+                                local velocity = eRoot.Velocity * 0.2
+                                local finalPos = p + Vector3.new(xOffset, -2.5, zOffset) + velocity
+                                
+                                PlaceStructure("Big Ol' Hut", finalPos)
+                                task.wait(0.02)
+                            end
+                            task.wait(1.8)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Heartbeat for instant actions
+RunService.Heartbeat:Connect(function()
+    local char = plr.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    if plantBoxToggle then
+        local rot = (tick() * 500) % 360
+        PlaceStructure("Plant Box", root.Position + Vector3.new(0, -3.5, 0), rot)
+    end
+    
+    if campfireToggle then
+        PlaceCampfireAtPlayer()
+        task.wait(0.5)
+    end
+end)
+
+-- Kill Aura
+task.spawn(function()
+    while true do
+        if killAuraEnabled then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local targets = {}
+                for _, p in pairs(game.Players:GetPlayers()) do
+                    if p ~= plr then
+                        local folder = workspace.Players:FindFirstChild(p.Name)
+                        if folder then
+                            local eid = folder:GetAttribute("EntityID")
+                            local hrp = folder:FindFirstChild("HumanoidRootPart")
+                            if eid and hrp then
+                                local dist = (hrp.Position - root.Position).Magnitude
+                                if dist <= killAuraRange then
+                                    table.insert(targets, {eid = eid, dist = dist})
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if #targets > 0 then
+                    table.sort(targets, function(a,b) return a.dist < b.dist end)
+                    local selected = {}
+                    for i = 1, 3 do
+                        if targets[i] then
+                            table.insert(selected, targets[i].eid)
+                        end
+                    end
+                    swingTool(selected)
+                end
+            end
+        end
+        task.wait() -- No cooldown as requested
+    end
+end)
+
+-- Auto Pickup
+task.spawn(function()
+    while true do
+        if autoPickupEnabled then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local itemsFolder = workspace:FindFirstChild("Items")
+                if itemsFolder then
+                    for _, item in ipairs(itemsFolder:GetChildren()) do
+                        local shouldPick = false
+                        
+                        if PickAllMode then
+                            shouldPick = true
+                        elseif selectedItems[item.Name] then
+                            shouldPick = true
+                        end
+                        
+                        if customPickupEnabled and customPickupText ~= "" then
+                            if string.find(string.lower(item.Name), string.lower(customPickupText)) then
+                                shouldPick = true
+                            end
+                        end
+
+                        if shouldPick then
+                            local itemPos = item:GetPivot().Position
+                            local dist = (itemPos - root.Position).Magnitude
+                            
+                            if dist <= pickupRange then
+                                local id = item:GetAttribute("EntityID") or item:GetAttribute("ID")
+                                
+                                if id and packets.Pickup and packets.Pickup.send then
+                                    pcall(function()
+                                        packets.Pickup.send(id)
+                                    end)
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if chestPickupEnabled and workspace:FindFirstChild("Deployables") then
+                    for _, chest in ipairs(workspace.Deployables:GetChildren()) do
+                        if chest:IsA("Model") and chest:FindFirstChild("Contents") then
+                            for _, item in ipairs(chest.Contents:GetChildren()) do
+                                local shouldPick = false
+                                
+                                if PickAllMode then
+                                    shouldPick = true
+                                elseif selectedItems[item.Name] then
+                                    shouldPick = true
+                                end
+                                
+                                if shouldPick then
+                                    local dist = (chest.PrimaryPart.Position - root.Position).Magnitude
+                                    if dist <= pickupRange then
+                                        local id = item:GetAttribute("EntityID")
+                                        if id then
+                                            pcall(function()
+                                                packets.Pickup.send(id)
+                                            end)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.01)
+    end
+end)
+
+-- Resource Aura
+task.spawn(function()
+    while true do
+        if resourceAuraEnabled then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local targets = {}
+                
+                if workspace:FindFirstChild("Resources") then
+                    for _, resource in ipairs(workspace.Resources:GetChildren()) do
+                        if resource:IsA("Model") then
+                            local entityId = resource:GetAttribute("EntityID")
+                            local part = resource.PrimaryPart or resource:FindFirstChildWhichIsA("BasePart")
+                            if entityId and part then
+                                local dist = (part.Position - root.Position).Magnitude
+                                if dist <= resourceRange then
+                                    table.insert(targets, {eid = entityId, dist = dist})
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if #targets > 0 then
+                    table.sort(targets, function(a,b) return a.dist < b.dist end)
+                    local selected = {}
+                    for i = 1, 3 do
+                        if targets[i] then
+                            table.insert(selected, targets[i].eid)
+                        end
+                    end
+                    swingTool(selected)
+                end
+            end
+        end
+        task.wait(0.1) -- Fixed cooldown
+    end
+end)
+
+-- Critter Aura
+task.spawn(function()
+    while true do
+        if critterAuraEnabled then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local targets = {}
+                
+                if workspace:FindFirstChild("Critters") then
+                    for _, critter in ipairs(workspace.Critters:GetChildren()) do
+                        if critter:IsA("Model") then
+                            local entityId = critter:GetAttribute("EntityID")
+                            local part = critter.PrimaryPart or critter:FindFirstChildWhichIsA("BasePart")
+                            if entityId and part then
+                                local dist = (part.Position - root.Position).Magnitude
+                                if dist <= critterRange then
+                                    table.insert(targets, {eid = entityId, dist = dist})
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if #targets > 0 then
+                    table.sort(targets, function(a,b) return a.dist < b.dist end)
+                    local selected = {}
+                    for i = 1, 3 do
+                        if targets[i] then
+                            table.insert(selected, targets[i].eid)
+                        end
+                    end
+                    swingTool(selected)
+                end
+            end
+        end
+        task.wait(0.1) -- Fixed cooldown
+    end
+end)
+
+-- FAST Auto Heal & Eat with REAL 240 CPS
+task.spawn(function()
+    local lastHealCheck = 0
+    local lastEatCheck = 0
+    local healItemCache = nil
+    local eatItemCache = nil
+    local healLastUsed = 0
+    local eatLastUsed = 0
+    
+    while true do
+        local currentTime = tick()
+        
+        -- Auto Heal
+        if autoHealEnabled then
+            local hp = getHealth()
+            if hp < autoHealThreshold then
+                -- Find item if not cached
+                if not healItemCache then
+                    healItemCache = getInventoryItem(autoHealFruit)
+                end
+                
+                if healItemCache then
+                    -- Send clicks at 240 CPS (no delay between clicks)
+                    local timePerClick = 1 / autoEatCPS
+                    if currentTime - healLastUsed >= timePerClick then
+                        -- Send multiple clicks per frame for 240 CPS
+                        for i = 1, 8 do -- Send 8 clicks per packet for maximum speed
+                            useBagItem(healItemCache.LayoutOrder)
+                        end
+                        healLastUsed = currentTime
+                    end
+                end
+            else
+                healItemCache = nil -- Reset cache when not healing
+            end
+        end
+
+        -- Auto Eat  
+        if autoEatEnabled then
+            local hunger = getHunger()
+            if hunger < autoEatThreshold then
+                -- Find item if not cached
+                if not eatItemCache then
+                    eatItemCache = getInventoryItem(autoEatFruit)
+                end
+                
+                if eatItemCache then
+                    -- Send clicks at 240 CPS (no delay between clicks)
+                    local timePerClick = 1 / autoEatCPS
+                    if currentTime - eatLastUsed >= timePerClick then
+                        -- Send multiple clicks per frame for 240 CPS
+                        for i = 1, 8 do -- Send 8 clicks per packet for maximum speed
+                            useBagItem(eatItemCache.LayoutOrder)
+                        end
+                        eatLastUsed = currentTime
+                    end
+                end
+            else
+                eatItemCache = nil -- Reset cache when not eating
+            end
+        end
+        
+        -- Small delay to prevent crashing
+        task.wait(0.001)
+    end
+end)
+
+-- Auto Drop
+task.spawn(function()
+    while true do
+        if autoDropEnabled then
+            for i = 1, 5 do -- Send multiple drops at once
+                dropItemByName(dropItem)
+                task.wait(0.0005) -- Tiny delay
+            end
+        end
+        
+        if autoDropCustomEnabled then
+            for i = 1, 5 do -- Send multiple drops at once
+                dropItemByName(customDropItem)
+                task.wait(0.0005) -- Tiny delay
+            end
+        end
+        task.wait(0.02) -- Check 50 times per second
+    end
+end)
+
+-- Auto Plant
+task.spawn(function()
+    while true do
+        if plantToggle then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local itemID = fruitToItemId[selectedFruit] or 94
+                local plantboxes = getPlantBoxes(plantRange)
+                table.sort(plantboxes, function(a, b) return a.dist < b.dist end)
+
+                for _, box in ipairs(plantboxes) do
+                    if not box.deployable:FindFirstChild("Seed") then
+                        interactStructure({entityID = box.entityid, itemID = itemID})
+                        task.wait(0.01)
+                    end
+                end
+            end
+        end
+        task.wait(0.05) -- Fixed delay
+    end
+end)
+
+-- Auto Harvest
+task.spawn(function()
+    while true do
+        if harvestToggle then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local bushes = getBushes(harvestRange, selectedFruit)
+                table.sort(bushes, function(a, b) return a.dist < b.dist end)
+                for _, bush in ipairs(bushes) do
+                    pickupItem(bush.entityid)
+                    task.wait(0.01)
+                end
+            end
+        end
+        task.wait(0.05)
+    end
+end)
+
+-- Tween Plant Box
+task.spawn(function()
+    while true do
+        if tweenPlantBoxEnabled then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local plantboxes = getPlantBoxes(tweenRange)
+                table.sort(plantboxes, function(a, b) return a.dist < b.dist end)
+
+                for _, box in ipairs(plantboxes) do
+                    if not box.deployable:FindFirstChild("Seed") then
+                        smartTween(box.deployable.PrimaryPart.Position, 5)
+                        break
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- Tween Bush + Plant Box
+task.spawn(function()
+    while true do
+        if tweenBushEnabled then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local bushes = getBushes(tweenRange, selectedFruit)
+                table.sort(bushes, function(a, b) return a.dist < b.dist end)
+
+                if #bushes > 0 then
+                    for _, bush in ipairs(bushes) do
+                        smartTween(bush.model.PrimaryPart.Position, 5)
+                        break
+                    end
+                else
+                    local plantboxes = getPlantBoxes(tweenRange)
+                    table.sort(plantboxes, function(a, b) return a.dist < b.dist end)
+
+                    for _, box in ipairs(plantboxes) do
+                        if not box.deployable:FindFirstChild("Seed") then
+                            smartTween(box.deployable.PrimaryPart.Position, 5)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- Door Handler
+task.spawn(function()
+    local dep = workspace:WaitForChild("Deployables")
+    dep.ChildAdded:Connect(function(child)
+        task.wait(0.1)
+        if child:IsA("Model") then
+            if child.Name:find("Hut") and Library.Flags["HutDoorDel"] then
+                local d = child:FindFirstChild("Door")
+                if d then d.Parent = nil end
+            elseif child.Name:find("Gate") and Library.Flags["GateDoorDel"] then
+                local d = child:FindFirstChild("Door")
+                if d then d.Parent = nil end
+            end
+        end
+    end)
+end)
+
+---------------------------------------------------------------------
+-- DRAWING-BASED ESP WITH FIXED ARMOR DETECTION
+---------------------------------------------------------------------
+
+local Camera = workspace.CurrentCamera
+
+local ESPSettings = {
+    Enabled = false,
+    Boxes = true,
+    Names = true,
+    HealthBar = true,
+    Distance = true,
+    Tracers = false,
+    MaxDistance = 5000,
+    UseTeamColor = false,
+    ESPColor = Color3.fromRGB(255, 255, 255),
+    ShowArmor = true,
+    ShowWeapon = true,
+}
+
+local EspObjects = {}
+
+local function NewDrawing(t, props)
+    local obj = Drawing.new(t)
+    for k, v in pairs(props) do
+        obj[k] = v
+    end
+    return obj
+end
+
+local function ClearESP(plr)
+    local esp = EspObjects[plr]
+    if esp then
+        for _, d in pairs(esp) do
+            pcall(function()
+                d.Visible = false
+                d:Remove()
+            end)
+        end
+        EspObjects[plr] = nil
+    end
+end
+
+local function ClearAllESP()
+    for plr, _ in pairs(EspObjects) do
+        ClearESP(plr)
+    end
+end
+
+local function GetCharParts(plr)
+    -- Try to get character from Players folder first (more reliable)
+    local playerFolder = workspace.Players:FindFirstChild(plr.Name)
+    if playerFolder then
+        local char = playerFolder
+        local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("LowerTorso") or char:FindFirstChild("Torso")
+        local head = char:FindFirstChild("Head")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hrp and head and hum then return char, hrp, head, hum end
+    end
+    
+    -- Fallback to regular character
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("LowerTorso") or char:FindFirstChild("Torso")
+    local head = char:FindFirstChild("Head")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not head or not hum then return end
+    return char, hrp, head, hum
+end
+
+local function WorldToScreen(pos)
+    local vec, onScreen = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(vec.X, vec.Y), onScreen, vec.Z
+end
+
+local function GetESPColorForPlayer(plr)
+    if ESPSettings.UseTeamColor and plr.TeamColor then
+        return plr.TeamColor.Color
+    end
+    
+    return ESPSettings.ESPColor
+end
+
+local function EnsureESP(plr)
+    if EspObjects[plr] then return EspObjects[plr] end
+
+    local color = GetESPColorForPlayer(plr)
+    local esp = {}
+
+    esp.Box = NewDrawing("Square", {
+        Color = color,
+        Thickness = 1.5,
+        ZIndex = 2,
+        Visible = false,
+        Filled = false
+    })
+
+    esp.Name = NewDrawing("Text", {
+        Color = color,
+        Size = 13,
+        Center = true,
+        Outline = true,
+        ZIndex = 3,
+        Visible = false,
+        Font = 2
+    })
+
+    esp.Distance = NewDrawing("Text", {
+        Color = Color3.fromRGB(200, 200, 200),
+        Size = 13,
+        Center = true,
+        Outline = true,
+        ZIndex = 3,
+        Visible = false,
+        Font = 2
+    })
+
+    esp.HealthBG = NewDrawing("Square", {
+        Color = Color3.fromRGB(20, 20, 20),
+        Thickness = 0,
+        Filled = true,
+        ZIndex = 1,
+        Visible = false
+    })
+
+    esp.HealthBar = NewDrawing("Square", {
+        Color = Color3.fromRGB(0, 255, 0),
+        Thickness = 0,
+        Filled = true,
+        ZIndex = 2,
+        Visible = false
+    })
+
+    esp.Tracer = NewDrawing("Line", {
+        Color = color,
+        Thickness = 1.5,
+        ZIndex = 1,
+        Visible = false
+    })
+
+    esp.ArmorText = NewDrawing("Text", {
+        Color = Color3.fromRGB(0, 200, 255),
+        Size = 12,
+        Center = true,
+        Outline = true,
+        ZIndex = 3,
+        Visible = false,
+        Font = 2
+    })
+
+    esp.WeaponText = NewDrawing("Text", {
+        Color = Color3.fromRGB(255, 200, 0),
+        Size = 12,
+        Center = true,
+        Outline = true,
+        ZIndex = 3,
+        Visible = false,
+        Font = 2
+    })
+
+    EspObjects[plr] = esp
+    return esp
+end
+
+local function Get2DBounds(char)
+    local minX, minY, maxX, maxY
+
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") then
+            local corners = {
+                part.CFrame * Vector3.new(part.Size.X / 2, part.Size.Y / 2, part.Size.Z / 2),
+                part.CFrame * Vector3.new(-part.Size.X / 2, part.Size.Y / 2, part.Size.Z / 2),
+                part.CFrame * Vector3.new(part.Size.X / 2, -part.Size.Y / 2, part.Size.Z / 2),
+                part.CFrame * Vector3.new(-part.Size.X / 2, -part.Size.Y / 2, part.Size.Z / 2),
+                part.CFrame * Vector3.new(part.Size.X / 2, part.Size.Y / 2, -part.Size.Z / 2),
+                part.CFrame * Vector3.new(-part.Size.X / 2, part.Size.Y / 2, -part.Size.Z / 2),
+                part.CFrame * Vector3.new(part.Size.X / 2, -part.Size.Y / 2, -part.Size.Z / 2),
+                part.CFrame * Vector3.new(-part.Size.X / 2, -part.Size.Y / 2, -part.Size.Z / 2),
+            }
+
+            for _, corner in ipairs(corners) do
+                local screenPos, onScreen = WorldToScreen(corner)
+                if onScreen then
+                    minX = minX and math.min(minX, screenPos.X) or screenPos.X
+                    minY = minY and math.min(minY, screenPos.Y) or screenPos.Y
+                    maxX = maxX and math.max(maxX, screenPos.X) or screenPos.X
+                    maxY = maxY and math.max(maxY, screenPos.Y) or screenPos.Y
+                end
+            end
+        end
+    end
+
+    if not minX or not minY or not maxX or not maxY then
+        return
+    end
+
+    return Vector2.new(minX, minY), Vector2.new(maxX, maxY)
+end
+
+local function UpdateESP()
+    if not ESPSettings.Enabled then
+        for _, esp in pairs(EspObjects) do
+            for _, d in pairs(esp) do
+                d.Visible = false
+            end
+        end
+        return
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local char, hrp, head, hum = GetCharParts(plr)
+            local esp = EnsureESP(plr)
+
+            if char and hrp and hum and hum.Health > 0 then
+                local rootPos, onScreen, depth = WorldToScreen(hrp.Position)
+                local distance = (hrp.Position - Camera.CFrame.Position).Magnitude
+
+                if onScreen and distance <= ESPSettings.MaxDistance then
+                    local top, bottom = Get2DBounds(char)
+                    if top and bottom then
+                        local boxSize = Vector2.new(bottom.X - top.X, bottom.Y - top.Y)
+                        local boxPos = Vector2.new(top.X, top.Y)
+                        local color = GetESPColorForPlayer(plr)
+
+                        if ESPSettings.Boxes then
+                            esp.Box.Position = boxPos
+                            esp.Box.Size = boxSize
+                            esp.Box.Color = color
+                            esp.Box.Visible = true
+                        else
+                            esp.Box.Visible = false
+                        end
+
+                        if ESPSettings.Names then
+                            esp.Name.Text = plr.Name
+                            esp.Name.Position = Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y - 14)
+                            esp.Name.Color = color
+                            esp.Name.Visible = true
+                        else
+                            esp.Name.Visible = false
+                        end
+
+                        if ESPSettings.Distance then
+                            esp.Distance.Text = string.format("%dm", math.floor(distance))
+                            esp.Distance.Position = Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y + boxSize.Y + 2)
+                            esp.Distance.Visible = true
+                        else
+                            esp.Distance.Visible = false
+                        end
+
+                        if ESPSettings.HealthBar then
+                            local maxHealth = hum.MaxHealth > 0 and hum.MaxHealth or 100
+                            local hpPercent = math.clamp(hum.Health / maxHealth, 0, 1)
+
+                            local barHeight = boxSize.Y
+                            local barWidth = 4
+
+                            local bgPos = Vector2.new(boxPos.X - barWidth - 3, boxPos.Y)
+                            esp.HealthBG.Position = bgPos
+                            esp.HealthBG.Size = Vector2.new(barWidth, barHeight)
+                            esp.HealthBG.Visible = true
+
+                            esp.HealthBar.Position = Vector2.new(bgPos.X, bgPos.Y + (1 - hpPercent) * barHeight)
+                            esp.HealthBar.Size = Vector2.new(barWidth, barHeight * hpPercent)
+                            esp.HealthBar.Color = Color3.new(1, 0, 0):Lerp(Color3.new(0, 1, 0), hpPercent)
+                            esp.HealthBar.Visible = true
+                        else
+                            esp.HealthBG.Visible = false
+                            esp.HealthBar.Visible = false
+                        end
+
+                        -- FIXED: Use correct armor detection from second script
+                        if ESPSettings.ShowArmor then
+                            local armor = getPlayerArmor(plr)
+                            esp.ArmorText.Text = "Armor: " .. armor
+                            esp.ArmorText.Position = Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y + boxSize.Y + 16)
+                            esp.ArmorText.Visible = true
+                        else
+                            esp.ArmorText.Visible = false
+                        end
+
+                        -- FIXED: Use correct weapon detection from second script
+                        if ESPSettings.ShowWeapon then
+                            local weapon = getPlayerWeapon(plr)
+                            esp.WeaponText.Text = "Weapon: " .. weapon
+                            esp.WeaponText.Position = Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y + boxSize.Y + 30)
+                            esp.WeaponText.Visible = true
+                        else
+                            esp.WeaponText.Visible = false
+                        end
+
+                        if ESPSettings.Tracers then
+                            local origin = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                            esp.Tracer.From = origin
+                            esp.Tracer.To = Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y + boxSize.Y)
+                            esp.Tracer.Color = color
+                            esp.Tracer.Visible = true
+                        else
+                            esp.Tracer.Visible = false
+                        end
+                    else
+                        for _, d in pairs(esp) do
+                            d.Visible = false
+                        end
+                    end
+                else
+                    for _, d in pairs(esp) do
+                        d.Visible = false
+                    end
+                end
+            else
+                for _, d in pairs(esp) do
+                    d.Visible = false
+                end
+            end
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(UpdateESP)
+
+Players.PlayerRemoving:Connect(function(plr)
+    ClearESP(plr)
+end)
+
+-- World ESP for items, critters, resources (unchanged)
+local function ApplyESP(obj, text, color, visible, showStuds)
+    local esp = obj:FindFirstChild("NevoxESP")
+    
+    if visible then
+        if not esp then
+            esp = Instance.new("BillboardGui")
+            esp.Name = "NevoxESP"
+            esp.AlwaysOnTop = true
+            esp.Size = UDim2.new(0, 100, 0, 50)
+            esp.LightInfluence = 0
+            
+            local label = Instance.new("TextLabel", esp)
+            label.BackgroundTransparency = 1
+            label.Size = UDim2.new(1, 0, 1, 0)
+            label.TextColor3 = color
+            label.TextStrokeTransparency = 0
+            label.TextStrokeColor3 = Color3.new(0,0,0)
+            label.Font = Enum.Font.RobotoMono
+            label.TextSize = 16
+            esp.Parent = obj
+        end
+        
+        local str = text
+        if showStuds and RootPart then
+            local dist = math.floor((obj:GetPivot().Position - RootPart.Position).Magnitude)
+            str = text .. "\n[" .. dist .. "m]"
+        end
+        
+        if esp.TextLabel.Text ~= str then
+            esp.TextLabel.Text = str
+        end
+        esp.Enabled = true
+    else
+        if esp then
+            esp:Destroy()
+        end
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    local char = plr.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local items = workspace:FindFirstChild("Items")
+    if items then
+        for _, item in ipairs(items:GetChildren()) do
+            local d = (item:GetPivot().Position - root.Position).Magnitude
+            local active = WorldESP.Items.Enabled and d <= WorldESP.Items.Range and (WorldESP.Items.All or WorldESP.Items.Filter[item.Name])
+            ApplyESP(item, item.Name, Color3.fromRGB(255, 255, 255), active, false)
+        end
+    end
+
+    local critters = workspace:FindFirstChild("Critters")
+    if critters then
+        for _, crit in ipairs(critters:GetChildren()) do
+            local d = (crit:GetPivot().Position - root.Position).Magnitude
+            local isAnt = string.find(crit.Name, "Ant")
+            local isShelly = string.find(crit.Name, "Shelly")
+            local match = WorldESP.Critters.All or WorldESP.Critters.Filter[crit.Name] or (WorldESP.Critters.Filter["Ants"] and isAnt) or (WorldESP.Critters.Filter["Shelly"] and isShelly)
+            local active = WorldESP.Critters.Enabled and d <= WorldESP.Critters.Range and match
+            ApplyESP(crit, crit.Name, Color3.fromRGB(0, 255, 255), active, false)
+        end
+    end
+
+    local resources = workspace:FindFirstChild("Resources")
+    if resources then
+        for _, node in ipairs(resources:GetChildren()) do
+            local d = (node:GetPivot().Position - root.Position).Magnitude
+            local isGod = string.find(string.lower(node.Name), "god")
+            local match = WorldESP.Resources.All or WorldESP.Resources.Filter[node.Name] or (WorldESP.Resources.Gods and isGod)
+            local active = WorldESP.Resources.Enabled and d <= WorldESP.Resources.Range and match
+            
+            local col = (isGod or string.find(node.Name, "Gold")) and Color3.fromRGB(255, 215, 0) or Color3.fromRGB(0, 255, 0)
+            ApplyESP(node, node.Name, col, active, true)
+        end
+    end
+end)
+
+---------------------------------------------------------------------
+-- SIMPLIFIED UI WITHOUT KEYBINDS
+---------------------------------------------------------------------
+
+local Watermark = Library:Watermark("Essence On Top", "135215559087473")
+Watermark:SetVisibility(false)
+local KeybindList = Library:KeybindsList()
+KeybindList:SetVisibility(false)
+
+local Pages = {
+    ["Main"] = Window:Page({
+        Name = "Main",
+        Icon = "111178525804834",
+        SubPages = true
+    }),
+
+    ["Combat"] = Window:Page({
+        Name = "Combat",
+        Icon = "100050851789190",
+        SubPages = true
+    }),
+
+    ["Visuals"] = Window:Page({
+        Name = "Visuals",
+        Icon = "115907015044719",
+        Columns = 2
+    }),
+
+    ["Settings"] = Window:Page({
+        Name = "settings",
+        Icon = "137300573942266",
+        Columns = 2,
+        SubPages = true
+    })
+}
+
+local MainSubpages = {
+    ["Movement"] = Pages["Main"]:SubPage({
+        Name = "movement",
+        Icon = "93007870315593",
+        Columns = 2
+    }),
+
+    ["Trapping"] = Pages["Main"]:SubPage({
+        Name = "trapping",
+        Icon = "134236649319095",
+        Columns = 2
+    }),
+
+    ["Farming"] = Pages["Main"]:SubPage({
+        Name = "farming",
+        Icon = "123554105934637",
+        Columns = 2
+    })
+}
+
+local CombatSubpages = {
+    ["KillAura"] = Pages["Combat"]:SubPage({
+        Name = "kill aura",
+        Icon = "100050851789190",
+        Columns = 2
+    }),
+
+    ["AutoHeal"] = Pages["Combat"]:SubPage({
+        Name = "auto heal",
+        Icon = "138827881557940",
+        Columns = 2
+    })
+}
+
+---------------------------------------------------------------------
+-- MOVEMENT SUBTAB WITH AUTO-REAPPLY ON RESPAWN
+---------------------------------------------------------------------
+
+do
+    local MovementSection = MainSubpages["Movement"]:Section({
+        Name = "movement",
+        Icon = "93007870315593",
+        Side = 1
+    })
+
+    local wsToggle, wsSlider
+
+    wsToggle = MovementSection:Toggle({
+        Name = "WalkSpeed",
+        Flag = "Move_WalkSpeedToggle",
+        Default = false,
+        Callback = function(v)
+            updateWalkSpeed(v, {Get = function() return Library.Flags["Move_WalkSpeed"] end})
+        end
+    })
+
+    wsSlider = MovementSection:Slider({
+        Name = "WalkSpeed value",
+        Flag = "Move_WalkSpeed",
+        Min = 16,
+        Max = 24,
+        Default = 16,
+        Decimals = 1,
+        Callback = function(v)
+            if wsToggle:Get() and Humanoid and Humanoid.Parent then
+                Humanoid.WalkSpeed = v
+            end
+        end
+    })
+
+    local jpToggle, jpSlider
+
+    jpToggle = MovementSection:Toggle({
+        Name = "JumpPower",
+        Flag = "Move_JumpPowerToggle",
+        Default = false,
+        Callback = function(v)
+            updateJumpPower(v, {Get = function() return Library.Flags["Move_JumpPower"] end})
+        end
+    })
+
+    jpSlider = MovementSection:Slider({
+        Name = "JumpPower value",
+        Flag = "Move_JumpPower",
+        Min = 30,
+        Max = 80,
+        Default = 50,
+        Decimals = 1,
+        Callback = function(v)
+            if jpToggle:Get() and Humanoid and Humanoid.Parent then
+                Humanoid.JumpPower = v
+            end
+        end
+    })
+
+    local hhToggle, hhSlider
+
+    hhToggle = MovementSection:Toggle({
+        Name = "HipHeight",
+        Flag = "Move_HipHeightToggle",
+        Default = false,
+        Callback = function(v)
+            updateHipHeight(v, {Get = function() return Library.Flags["Move_HipHeight"] end})
+        end
+    })
+
+    hhSlider = MovementSection:Slider({
+        Name = "HipHeight value",
+        Flag = "Move_HipHeight",
+        Min = -2,
+        Max = 10,
+        Default = 2,
+        Decimals = 1,
+        Callback = function(v)
+            if hhToggle:Get() and Humanoid and Humanoid.Parent then
+                Humanoid.HipHeight = v
+            end
+        end
+    })
+
+    MovementSection:Toggle({
+        Name = "Double Jump",
+        Flag = "Move_DoubleJump",
+        Default = false,
+        Callback = function(v)
+            updateDoubleJump(v, {Get = function() return Library.Flags["Move_JumpPower"] end})
+        end
+    })
+
+    MovementSection:Toggle({
+        Name = "Mountain Climer",
+        Flag = "Move_MountainClimer",
+        Default = false,
+        Callback = function(v)
+            updateNoSlip(v)
+        end
+    })
+end
+
+---------------------------------------------------------------------
+-- TRAPPING SUBTAB
+---------------------------------------------------------------------
+
+do
+    local TrappingSection = MainSubpages["Trapping"]:Section({
+        Name = "trapping",
+        Icon = "134236649319095",
+        Side = 1
+    })
+
+    local DoorSection = MainSubpages["Trapping"]:Section({
+        Name = "doors",
+        Icon = "137300573942266",
+        Side = 2
+    })
+
+    TrappingSection:Toggle({
+        Name = "Auto Hut",
+        Flag = "AutoHut",
+        Default = false,
+        Callback = function(v) 
+            hutToggle = v 
+        end
+    })
+
+    TrappingSection:Toggle({
+        Name = "Auto Campfire",
+        Flag = "AutoCampfire",
+        Default = false,
+        Callback = function(v) 
+            campfireToggle = v 
+        end
+    })
+
+    TrappingSection:Toggle({
+        Name = "Plant Box Ground",
+        Flag = "AutoPlantBox",
+        Default = false,
+        Callback = function(v) plantBoxToggle = v end
+    })
+
+    DoorSection:Toggle({
+        Name = "Remove Hut Doors", 
+        Flag = "HutDoorDel", 
+        Default = false,
+        Callback = function(v) 
+            HandleDoors("Hut", v) 
+        end
+    })
+
+    DoorSection:Toggle({
+        Name = "Remove Gate Doors", 
+        Flag = "GateDoorDel", 
+        Default = false,
+        Callback = function(v) 
+            HandleDoors("Gate", v) 
+        end
+    })
+
+    local TeleportSection = MainSubpages["Trapping"]:Section({
+        Name = "teleport",
+        Icon = "137623872962804",
+        Side = 2
+    })
+
+    TeleportSection:Button({
+        Name = "Teleport To Void", 
+        Callback = function()
+            local PlaceID = 11879754496
+            TeleportService:Teleport(PlaceID, plr)
+        end
+    })
+end
+
+---------------------------------------------------------------------
+-- FARMING SUBTAB
+---------------------------------------------------------------------
+
+do
+    local FarmingSection = MainSubpages["Farming"]:Section({
+        Name = "auto farming",
+        Icon = "123554105934637",
+        Side = 1
+    })
+
+    local TweenSection = MainSubpages["Farming"]:Section({
+        Name = "tween farming",
+        Icon = "130045183204879",
+        Side = 2
+    })
+
+    local ResourceSection = MainSubpages["Farming"]:Section({
+        Name = "resource aura",
+        Icon = "108839695397679",
+        Side = 2
+    })
+
+    FarmingSection:Dropdown({
+        Name = "Select Fruit",
+        Default = "Bloodfruit",
+        Items = {"Bloodfruit", "Bluefruit", "Lemon", "Mango", "Coconut", "Jelly", "Banana", "Orange", "Berry", "Oddberry", "Strangefruit", "Strawberry", "Sunfruit", "Pumpkin", "Prickly Pear", "Apple", "Cloudberry", "Carrot", "Cloudfruit"},
+        Callback = function(v) selectedFruit = v end
+    })
+
+    FarmingSection:Toggle({
+        Name = "Auto Plant",
+        Default = false,
+        Callback = function(v) plantToggle = v end
+    })
+
+    FarmingSection:Slider({
+        Name = "Plant Range",
+        Min = 1,
+        Max = 30,
+        Suffix = "studs",
+        Default = 30,
+        Decimals = 1,
+        Callback = function(v) plantRange = v end
+    })
+
+    FarmingSection:Toggle({
+        Name = "Auto Harvest",
+        Default = false,
+        Callback = function(v) harvestToggle = v end
+    })
+
+    FarmingSection:Slider({
+        Name = "Harvest Range",
+        Min = 1,
+        Max = 30,
+        Suffix = "studs",
+        Default = 30,
+        Decimals = 1,
+        Callback = function(v) harvestRange = v end
+    })
+
+    TweenSection:Toggle({
+        Name = "Tween to Plant Box",
+        Default = false,
+        Callback = function(v) 
+            tweenPlantBoxEnabled = v
+            if currentTween then
+                currentTween:Cancel()
+                currentTween = nil
+            end
+        end
+    })
+
+    TweenSection:Toggle({
+        Name = "Tween to Bush + Plant Box",
+        Default = false,
+        Callback = function(v) 
+            tweenBushEnabled = v
+            if currentTween then
+                currentTween:Cancel()
+                currentTween = nil
+            end
+        end
+    })
+
+    TweenSection:Slider({
+        Name = "Tween Range",
+        Min = 1,
+        Max = 250,
+        Suffix = "studs",
+        Default = 250,
+        Decimals = 1,
+        Callback = function(v) tweenRange = v end
+    })
+
+    TweenSection:Slider({
+        Name = "Tween Speed",
+        Min = 5,
+        Max = 30,
+        Suffix = "studs/s",
+        Default = 15,
+        Decimals = 1,
+        Callback = function(v) tweenSpeed = v end
+    })
+
+    ResourceSection:Toggle({
+        Name = "Resource Aura",
+        Default = false,
+        Callback = function(v) resourceAuraEnabled = v end
+    })
+
+    ResourceSection:Slider({
+        Name = "Resource Range",
+        Min = 1,
+        Max = 20,
+        Suffix = "studs",
+        Default = 20,
+        Decimals = 1,
+        Callback = function(v) resourceRange = v end
+    })
+
+    ResourceSection:Toggle({
+        Name = "Critter Aura",
+        Default = false,
+        Callback = function(v) critterAuraEnabled = v end
+    })
+
+    ResourceSection:Slider({
+        Name = "Critter Range",
+        Min = 1,
+        Max = 20,
+        Suffix = "studs",
+        Default = 20,
+        Decimals = 1,
+        Callback = function(v) critterRange = v end
+    })
+end
+
+---------------------------------------------------------------------
+-- COMBAT SUBTABS
+---------------------------------------------------------------------
+
+do
+    local KillAuraSection = CombatSubpages["KillAura"]:Section({
+        Name = "kill aura",
+        Icon = "100050851789190",
+        Side = 1
+    })
+
+    local PickupSection = CombatSubpages["KillAura"]:Section({
+        Name = "auto pickup",
+        Icon = "108839695397679",
+        Side = 2
+    })
+
+    local DropSection = CombatSubpages["KillAura"]:Section({
+        Name = "auto drop",
+        Icon = "137300573942266",
+        Side = 2
+    })
+
+    KillAuraSection:Toggle({
+        Name = "Kill Aura",
+        Default = false,
+        Callback = function(v) 
+            killAuraEnabled = v 
+        end
+    })
+
+    KillAuraSection:Slider({
+        Name = "Range",
+        Min = 1,
+        Max = 12,
+        Suffix = "studs",
+        Default = 8,
+        Decimals = 1,
+        Callback = function(v) 
+            killAuraRange = v 
+        end
+    })
+
+    PickupSection:Toggle({
+        Name = "Auto Pickup",
+        Default = false,
+        Callback = function(v) autoPickupEnabled = v end
+    })
+
+    PickupSection:Toggle({
+        Name = "Chest Pickup",
+        Default = false,
+        Callback = function(v) chestPickupEnabled = v end
+    })
+
+    PickupSection:Slider({
+        Name = "Pickup Range",
+        Min = 1,
+        Max = 30,
+        Suffix = "studs",
+        Default = 20,
+        Decimals = 1,
+        Callback = function(v) pickupRange = v end
+    })
+
+    PickupSection:Dropdown({
+        Name = "Items to Pickup",
+        Items = allItems,
+        Multi = true,
+        Callback = function(Value)
+            selectedItems = {}
+            PickAllMode = false
+            
+            if type(Value) == "table" then
+                for _, itemName in ipairs(Value) do
+                    if itemName == "ALL ITEMS" then
+                        PickAllMode = true
+                    else
+                        selectedItems[itemName] = true
+                    end
+                end
+            end
+        end
+    })
+
+    PickupSection:Toggle({
+        Name = "Custom Item Pickup",
+        Default = false,
+        Callback = function(v) customPickupEnabled = v end
+    })
+
+    PickupSection:Textbox({
+        Name = "Custom Item Name",
+        Default = "",
+        Placeholder = "Enter item name...",
+        Callback = function(v) customPickupText = v end
+    })
+
+    DropSection:Toggle({
+        Name = "Auto Drop",
+        Default = false,
+        Callback = function(v) autoDropEnabled = v end
+    })
+
+    DropSection:Dropdown({
+        Name = "Select Item to Drop",
+        Default = "All",
+        Items = {"All", "Bloodfruit", "Bluefruit", "Lemon", "Coconut", "Jelly", "Banana", "Orange", "Berry", "Oddberry", "Strangefruit", "Strawberry", "Sunfruit", "Pumpkin", "Prickly Pear", "Apple", "Barley", "Cloudberry", "Carrot", "Snow Berry", "Cloudfruit"},
+        Callback = function(v) dropItem = v end
+    })
+
+    DropSection:Toggle({
+        Name = "Auto Drop Custom",
+        Default = false,
+        Callback = function(v) autoDropCustomEnabled = v end
+    })
+
+    DropSection:Textbox({
+        Name = "Custom Item",
+        Default = "Bloodfruit",
+        Placeholder = "...",
+        Callback = function(v) customDropItem = v end
+    })
+end
+
+do
+    local AutoHealSection = CombatSubpages["AutoHeal"]:Section({
+        Name = "auto heal & eat",
+        Icon = "138827881557940",
+        Side = 1
+    })
+
+    AutoHealSection:Toggle({
+        Name = "Auto Heal",
+        Default = false,
+        Callback = function(v) 
+            autoHealEnabled = v 
+        end
+    })
+
+    AutoHealSection:Dropdown({
+        Name = "Heal Fruit",
+        Default = "Bloodfruit",
+        Items = {"Bloodfruit","Bluefruit","Lemon","Coconut","Jelly","Banana","Orange","Berry","Oddberry","Strangefruit","Strawberry","Sunfruit","Pumpkin","Prickly Pear","Apple","Barley","Cloudberry","Carrot","Snow Berry","Cloudfruit"},
+        Callback = function(v) 
+            autoHealFruit = v 
+        end
+    })
+
+    AutoHealSection:Slider({
+        Name = "Heal Below %",
+        Min = 1,
+        Max = 100,
+        Suffix = "%",
+        Default = 90,
+        Decimals = 1,
+        Callback = function(v) 
+            autoHealThreshold = v 
+        end
+    })
+
+    AutoHealSection:Slider({
+        Name = "Heal Delay (ms)",
+        Min = 1,
+        Max = 100,
+        Suffix = "ms",
+        Default = 5,
+        Decimals = 1,
+        Callback = function(v) 
+            healClickDelay = v / 1000
+        end
+    })
+
+    AutoHealSection:Toggle({
+        Name = "Auto Eat",
+        Default = false,
+        Callback = function(v) 
+            autoEatEnabled = v 
+        end
+    })
+
+    AutoHealSection:Dropdown({
+        Name = "Eat Fruit",
+        Default = "Coconut",
+        Items = {"Coconut","Bloodfruit","Bluefruit","Lemon","Jelly","Banana","Orange","Berry","Oddberry","Strangefruit","Strawberry","Sunfruit","Pumpkin","Prickly Pear","Apple","Barley","Cloudberry","Carrot","Snow Berry","Cloudfruit"},
+        Callback = function(v) 
+            autoEatFruit = v 
+        end
+    })
+
+    AutoHealSection:Slider({
+        Name = "Eat Below %",
+        Min = 1,
+        Max = 100,
+        Suffix = "%",
+        Default = 90,
+        Decimals = 1,
+        Callback = function(v) 
+            autoEatThreshold = v 
+        end
+    })
+
+    AutoHealSection:Slider({
+        Name = "Eat Speed (CPS)",
+        Min = 1,
+        Max = 240,
+        Suffix = "cps",
+        Default = 240,
+        Decimals = 1,
+        Callback = function(v) 
+            autoEatCPS = v
+        end
+    })
+end
+
+---------------------------------------------------------------------
+-- VISUALS TAB WITH WORKING DRAWING ESP
+---------------------------------------------------------------------
+
+do
+    local PlayerESPSection = Pages["Visuals"]:Section({Name = "Player ESP", Side = 1})
+    local WorldItemsSection = Pages["Visuals"]:Section({Name = "Dropped Items ESP", Side = 1})
+    local CrittersSection = Pages["Visuals"]:Section({Name = "Critters ESP", Side = 2})
+    local ResourcesSection = Pages["Visuals"]:Section({Name = "Resources ESP", Side = 2})
+
+    PlayerESPSection:Toggle({
+        Name = "Enabled",
+        Flag = "ESPEnabled",
+        Default = false,
+        Callback = function(v)
+            ESPSettings.Enabled = v
+            if not v then
+                ClearAllESP()
+            end
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Boxes",
+        Flag = "ESPBoxes",
+        Default = true,
+        Callback = function(v)
+            ESPSettings.Boxes = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Names",
+        Flag = "ESPNames",
+        Default = true,
+        Callback = function(v)
+            ESPSettings.Names = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Health bar",
+        Flag = "ESPHealth",
+        Default = true,
+        Callback = function(v)
+            ESPSettings.HealthBar = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Distance",
+        Flag = "ESPDistance",
+        Default = true,
+        Callback = function(v)
+            ESPSettings.Distance = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Armor Display",
+        Flag = "ESPArmor",
+        Default = true,
+        Callback = function(v)
+            ESPSettings.ShowArmor = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Weapon Display",
+        Flag = "ESPWeapon",
+        Default = true,
+        Callback = function(v)
+            ESPSettings.ShowWeapon = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Tracers",
+        Flag = "ESPTracers",
+        Default = false,
+        Callback = function(v)
+            ESPSettings.Tracers = v
+        end
+    })
+
+    PlayerESPSection:Slider({
+        Name = "Max distance",
+        Flag = "ESPMaxDist",
+        Default = ESPSettings.MaxDistance,
+        Min = 100,
+        Max = 10000,
+        Decimals = 1,
+        Callback = function(v)
+            ESPSettings.MaxDistance = v
+        end
+    })
+
+    PlayerESPSection:Toggle({
+        Name = "Team color",
+        Flag = "ESPUseTeamColor",
+        Default = false,
+        Callback = function(v)
+            ESPSettings.UseTeamColor = v
+        end
+    })
+
+    PlayerESPSection:Label("esp color", "Left"):Colorpicker({
+        Name = "ESPColor",
+        Flag = "ESPColor",
+        Default = ESPSettings.ESPColor,
+        Alpha = 0,
+        Callback = function(color)
+            ESPSettings.ESPColor = color
+            if not ESPSettings.UseTeamColor then
+                for _, esp in pairs(EspObjects) do
+                    if esp.Box then esp.Box.Color = color end
+                    if esp.Name then esp.Name.Color = color end
+                    if esp.Tracer then esp.Tracer.Color = color end
+                end
+            end
+        end
+    })
+
+    WorldItemsSection:Toggle({
+        Name = "Enabled",
+        Default = false,
+        Callback = function(v) WorldESP.Items.Enabled = v end
+    })
+
+    WorldItemsSection:Slider({
+        Name = "Range",
+        Min = 50,
+        Max = 5000,
+        Default = 500,
+        Callback = function(v) WorldESP.Items.Range = v end
+    })
+
+    WorldItemsSection:Dropdown({
+        Name = "Item Filter",
+        Items = {"ALL ITEMS", "Wood", "Log", "Stone", "Iron", "Gold", "Adurite", "Coin", "Essence", "Magnetite", "Bloodfruit", "Bluefruit", "Lemon", "Strawberry", "Crystal Chunk", "Leaves", "Hide", "Steel", "Pink Diamond", "Emerald", "Void Shard", "Jelly", "Ice Cube", "Coal"},
+        Multi = true,
+        Callback = function(Value)
+            WorldESP.Items.Filter = {}
+            WorldESP.Items.All = false
+            if type(Value) == "table" then
+                for _, n in ipairs(Value) do
+                    if n == "ALL ITEMS" then 
+                        WorldESP.Items.All = true 
+                    else 
+                        WorldESP.Items.Filter[n] = true 
+                    end
+                end
+            end
+        end
+    })
+
+    CrittersSection:Toggle({
+        Name = "Enabled",
+        Default = false,
+        Callback = function(v) WorldESP.Critters.Enabled = v end
+    })
+
+    CrittersSection:Slider({
+        Name = "Range",
+        Min = 100,
+        Max = 5000,
+        Default = 1000,
+        Callback = function(v) WorldESP.Critters.Range = v end
+    })
+
+    CrittersSection:Dropdown({
+        Name = "Critter Filter",
+        Items = {"ALL CRITTERS", "Ants", "Goober", "Shelly", "Bird"},
+        Multi = true,
+        Callback = function(Value)
+            WorldESP.Critters.Filter = {}
+            WorldESP.Critters.All = false
+            if type(Value) == "table" then
+                for _, n in ipairs(Value) do
+                    if n == "ALL CRITTERS" then 
+                        WorldESP.Critters.All = true 
+                    else 
+                        WorldESP.Critters.Filter[n] = true 
+                    end
+                end
+            end
+        end
+    })
+
+    ResourcesSection:Toggle({
+        Name = "Enabled",
+        Default = false,
+        Callback = function(v) WorldESP.Resources.Enabled = v end
+    })
+
+    ResourcesSection:Slider({
+        Name = "Range",
+        Min = 100,
+        Max = 5000,
+        Default = 2500,
+        Callback = function(v) WorldESP.Resources.Range = v end
+    })
+
+    ResourcesSection:Dropdown({
+        Name = "Node Filter",
+        Items = {"ALL NODES", "GOD NODES", "Stone Node", "Coal Node", "Iron Node", "Gold Node", "Adurite Node", "Crystal Lode"},
+        Multi = true,
+        Callback = function(Value)
+            WorldESP.Resources.Filter = {}
+            WorldESP.Resources.All = false
+            WorldESP.Resources.Gods = false
+            if type(Value) == "table" then
+                for _, n in ipairs(Value) do
+                    if n == "ALL NODES" then 
+                        WorldESP.Resources.All = true 
+                    elseif n == "GOD NODES" then 
+                        WorldESP.Resources.Gods = true
+                    else 
+                        WorldESP.Resources.Filter[n] = true 
+                    end
+                end
+            end
+        end
+    })
+end
+
+---------------------------------------------------------------------
+-- SETTINGS PAGE WITHOUT KEYBINDS TAB
+---------------------------------------------------------------------
+
+do -- Settings
+    local Subpages = {
+        ["Configs"] = Pages["Settings"]:SubPage({
+            Name = "configs", 
+            Icon = "96491224522405", 
+            Columns = 2
+        }),
+
+        ["Theming"] = Pages["Settings"]:SubPage({
+            Name = "theming", 
+            Icon = "103863157706913", 
+            Columns = 2
+        }),
+
+        ["Configuration"] = Pages["Settings"]:SubPage({
+            Name = "configuration", 
+            Icon = "137300573942266", 
+            Columns = 2
+        })
+    }
+
+    do -- Theming
+        local ThemingSection = Subpages["Theming"]:Section({Name = "theming", Icon = "103863157706913", Side = 1})
+        local ThemingProfiles = Subpages["Theming"]:Section({Name = "profiles", Icon = "96491224522405", Side = 2})
+        local AutoloadSection = Subpages["Theming"]:Section({Name = "autoload", Icon = "137623872962804", Side = 2})
+
+        for Index, Value in pairs(Library.Theme) do 
+            Library.ThemeColorpickers[Index] = ThemingSection:Label(Index, "Left"):Colorpicker({
+                Name = "Colorpicker",
+                Flag = "ColorpickerTheme" .. Index,
+                Default = Value,
+                Alpha = 0,
+                Callback = function(Color, Alpha)
+                    Library.Theme[Index] = Color
+                    Library:ChangeTheme(Index, Color)
+                end
+            })
+        end
+
+        ThemingProfiles:Dropdown({
+            Name = "preset themes",
+            Items = { "Preset", "Halloween", "Aqua", "One Tap" },
+            Default = "Preset",
+            Multi = false,
+            Callback = function(Value)
+                local ThemeData = Library.Themes[Value]
+
+                if not ThemeData then 
+                    return
+                end
+
+                for Index, Value in pairs(Library.Theme) do 
+                    Library.Theme[Index] = ThemeData[Index]
+                    Library:ChangeTheme(Index, ThemeData[Index])
+
+                    Library.ThemeColorpickers[Index]:Set(ThemeData[Index])
+                end
+
+                task.wait(0.3)
+
+                Library:Thread(function()
+                    for Index, Value in pairs(Library.Theme) do 
+                        Library.Theme[Index] = Library.Flags["ColorpickerTheme" .. Index].Color
+                        Library:ChangeTheme(Index, Library.Flags["ColorpickerTheme" .. Index].Color)
+                    end    
+                end)
+            end
+        })
+
+        local ThemeSelected 
+        local ThemeName
+
+        do
+            local ThemesDropdown = ThemingProfiles:Dropdown({
+                Name = "themes", 
+                Flag = "ThemesList", 
+                Items = { }, 
+                Multi = false,
+                Callback = function(Value)
+                    ThemeSelected = Value
+                end
+            })
+
+            ThemingProfiles:Textbox({
+                Name = "theme name", 
+                Default = "", 
+                Flag = "ThemeName", 
+                Placeholder = "enter text", 
+                Callback = function(Value)
+                    ThemeName = Value
+                end
+            })
+
+            ThemingProfiles:Button({
+                Name = "save",
+                Callback = function()
+                    if ThemeName and ThemeName ~= "" then
+                        writefile(Library.Folders.Themes .. "/" .. ThemeName .. ".json", Library:GetTheme())
+                        Library:RefreshThemesList(ThemesDropdown)
+                    end
+                end
+            })
+
+            ThemingProfiles:Button({
+                Name = "load",
+                Callback = function()
+                    if ThemeSelected then
+                        local Success, Result = Library:LoadTheme(readfile(Library.Folders.Themes .. "/" .. ThemeSelected))
+
+                        if Success then 
+                            Library:Notification({
+                                Name = "Success",
+                                Description = "Succesfully loaded theme: ".. ThemeSelected,
+                                Duration = 5,
+                                Icon = "116339777575852",
+                                IconColor = Color3.fromRGB(52, 255, 164)
+                            })
+
+                            task.wait(0.3)
+
+                            Library:Thread(function()
+                                for Index, Value in pairs(Library.Theme) do 
+                                    Library.Theme[Index] = Library.Flags["ColorpickerTheme" .. Index].Color
+                                    Library:ChangeTheme(Index, Library.Flags["ColorpickerTheme" .. Index].Color)
+                                end    
+                            end)
+                        else
+                            Library:Notification({
+                                Name = "Error!",
+                                Description = "Failed to load theme, error:\n",
+                                Duration = 5,
+                                Icon = "97118059177470",
+                                IconColor = Color3.fromRGB(255, 120, 120)
+                            })
+                        end
+                    end
+                end
+            })
+
+            AutoloadSection:Button({
+                Name = "set selected theme as autoload",
+                Callback = function()
+                    if ThemeSelected then 
+                        writefile(Library.Folders.Directory .. "/AutoLoadTheme (do not modify this).json", readfile(Library.Folders.Themes .. "/" .. ThemeSelected))
+                    end
+                end
+            })
+
+            AutoloadSection:Button({
+                Name = "set current theme as autoload",
+                Callback = function()
+                    if ThemeSelected then 
+                        writefile(Library.Folders.Directory .. "/AutoLoadTheme (do not modify this).json", Library:GetTheme())
+                    end
+                end
+            })
+
+            AutoloadSection:Button({
+                Name = "remove autoload theme",
+                Callback = function()
+                    writefile(Library.Folders.Directory .. "/AutoLoadTheme (do not modify this).json", "")
+                end
+            })
+
+            Library:RefreshThemesList(ThemesDropdown)
+        end
+    end
+
+    do -- Configs
+        local ConfigsSection = Subpages["Configs"]:Section({Name = "profiles", Icon = "96491224522405", Side = 1})
+        local AutoloadSection = Subpages["Configs"]:Section({Name = "autoload", Icon = "137623872962804", Side = 2})
+
+        local ConfigSelected 
+        local ConfigName
+
+        do
+            local ConfigsDropdown = ConfigsSection:Dropdown({
+                Name = "configs", 
+                Flag = "ConfigsList", 
+                Items = { }, 
+                Multi = false,
+                Callback = function(Value)
+                    ConfigSelected = Value
+                end
+            })
+
+            ConfigsSection:Textbox({
+                Name = "config name", 
+                Default = "", 
+                Flag = "ConfigName", 
+                Placeholder = "enter text", 
+                Callback = function(Value)
+                    ConfigName = Value
+                end
+            })
+
+            ConfigsSection:Button({
+                Name = "create",
+                Callback = function()
+                    if ConfigName and ConfigName ~= "" then
+                        writefile(Library.Folders.Configs .. "/" .. ConfigName .. ".json", Library:GetConfig())
+                        Library:RefreshConfigsList(ConfigsDropdown)
+                    end
+                end
+            })
+
+            ConfigsSection:Button({
+                Name = "delete",
+                Callback = function()
+                    if ConfigSelected then
+                        Library:DeleteConfig(ConfigSelected)
+                        Library:RefreshConfigsList(ConfigsDropdown)
+                    end
+                end
+            })
+
+            ConfigsSection:Button({
+                Name = "load",
+                Callback = function()
+                    if ConfigSelected then
+                        local Success, Result = Library:LoadConfig(readfile(Library.Folders.Configs .. "/" .. ConfigSelected))
+
+                        if Success then 
+                            Library:Notification({
+                                Name = "Success",
+                                Description = "Succesfully loaded config: ".. ConfigSelected,
+                                Duration = 5,
+                                Icon = "116339777575852",
+                                IconColor = Color3.fromRGB(52, 255, 164)
+                            })
+
+                            task.wait(0.3)
+
+                            Library:Thread(function()
+                                for Index, Value in pairs(Library.Theme) do 
+                                    Library.Theme[Index] = Library.Flags["ColorpickerTheme" .. Index].Color
+                                    Library:ChangeTheme(Index, Library.Flags["ColorpickerTheme" .. Index].Color)
+                                end    
+                            end)
+                        else
+                            Library:Notification({
+                                Name = "Error!",
+                                Description = "Failed to load config, error:\n",
+                                Duration = 5,
+                                Icon = "97118059177470",
+                                IconColor = Color3.fromRGB(255, 120, 120)
+                            })
+                        end
+                    end
+                end
+            })
+
+            ConfigsSection:Button({
+                Name = "save",
+                Callback = function()
+                    if ConfigSelected then
+                        Library:SaveConfig(ConfigSelected)
+                    end
+                end
+            })
+
+            ConfigsSection:Button({
+                Name = "refresh list",
+                Callback = function()
+                    Library:RefreshConfigsList(ConfigsDropdown)
+                end
+            })
+
+            Library:RefreshConfigsList(ConfigsDropdown)
+        end
+
+        do
+            AutoloadSection:Button({
+                Name = "set selected config as autoload",
+                Callback = function()
+                    if ConfigSelected then 
+                        writefile(Library.Folders.Directory .. "/AutoLoadConfig (do not modify this).json", readfile(Library.Folders.Configs .. "/" .. ConfigSelected))
+                    end
+                end
+            })
+
+            AutoloadSection:Button({
+                Name = "set current config as autoload",
+                Callback = function()
+                    if ConfigSelected then 
+                        writefile(Library.Folders.Directory .. "/AutoLoadConfig (do not modify this).json", Library:GetConfig())
+                    end
+                end
+            })
+
+            AutoloadSection:Button({
+                Name = "remove autoload config",
+                Callback = function()
+                    writefile(Library.Folders.Directory .. "/AutoLoadConfig (do not modify this).json", "")
+                end
+            })
+        end
+    end
+
+    do -- Configuration
+        local MenuSection = Subpages["Configuration"]:Section({Name = "menu", Icon = "93007870315593", Side = 1})
+        local TweeningSection = Subpages["Configuration"]:Section({Name = "tweening", Icon = "130045183204879", Side = 2})
+
+        do
+            MenuSection:Label("menu keybind", "Left"):Keybind({
+                Name = "MenuKeybind",
+                Flag = "MenuKeybind",
+                Mode = "toggle",
+                Default = Library.MenuKeybind,
+                Callback = function()
+                    Library.MenuKeybind = Library.Flags["MenuKeybind"].Key
+                end
+            })
+
+            MenuSection:Toggle({
+                Name = "keybind list",
+                Flag = "keybind list",
+                Default = false,
+                Callback = function(Value)
+                    KeybindList:SetVisibility(Value)
+                end
+            })
+            
+            MenuSection:Toggle({
+                Name = "watermark",
+                Flag = "watermark",
+                Default = false,
+                Callback = function(Value)
+                    Watermark:SetVisibility(Value)
+                end
+            })
+
+            MenuSection:Button({
+                Name = "unload",
+                Callback = function()
+                    Library:Unload()
+                end
+            })
+        end
+
+        do
+            TweeningSection:Slider({
+                Name = "time",
+                Flag = "TweenTime",
+                Default = Library.Tween.Time,
+                Min = 0,
+                Max = 5,
+                Decimals = 0.01,
+                Callback = function(Value)
+                    Library.Tween.Time = Value
+                end
+            })
+
+            TweeningSection:Dropdown({
+                Name = "style",
+                Flag = "TweenStyle",
+                Default = "Cubic",
+                Items = {"Linear", "Sine", "Quad", "Cubic", "Quart", "Quint", "Exponential", "Circular", "Back", "Elastic", "Bounce"},
+                Callback = function(Value)
+                    Library.Tween.Style = Enum.EasingStyle[Value]
+                end
+            })
+
+            TweeningSection:Dropdown({
+                Name = "direction",
+                Flag = "TweenDirection",
+                Default = "Out",
+                Items = {"In", "Out", "InOut"},
+                Callback = function(Value)
+                    Library.Tween.Direction = Enum.EasingDirection[Value]
+                end
+            })
+        end
+    end
+end
+
+---------------------------------------------------------------------
+-- INITIALIZATION
+---------------------------------------------------------------------
+
+-- Initialize all variables to false on load
+killAuraEnabled = false
+autoPickupEnabled = false
+resourceAuraEnabled = false
+critterAuraEnabled = false
+hutToggle = false
+tweenPlantBoxEnabled = false
+tweenBushEnabled = false
+ESPSettings.Enabled = false
+
+Library:Notification({
+    Name = "Loaded",
+    Description = "Loaded library in: " .. string.format("%.4f", os.clock() - LoadingTick) .. " seconds",
+    Duration = 5
+})
+
+Library:Init()
